@@ -848,7 +848,9 @@ function fileSave(sourceText, fileIdentity) {
 import * as gm from './code/gm.mjs';
 window.gm = gm; //DEBUG
 
-import * as sv from './code/sv.mjs';
+// Keep the HTML and STL adapter module on the same deployed version. GitHub
+// Pages may otherwise serve a fresh index.html with a cached sv.mjs.
+import * as sv from './code/sv.mjs?v=stl-adapter-20260901-2';
 window.sv = sv; //DEBUG
 
 // window.library = new sv.Library();
@@ -904,7 +906,7 @@ document.getElementById("edit-path").addEventListener('click', async function() 
 });
 
 // for STL import
-import {loadLibraryFromURL} from './code/sv.mjs';
+import {loadLibraryFromURL} from './code/sv.mjs?v=stl-adapter-20260901-2';
 window.library = await loadLibraryFromURL("./block-library/blocks.json");
 
 
@@ -5146,7 +5148,17 @@ document.getElementById("voxelize").addEventListener("click", async function() {
     // requestRedraw();
     
     // complete message
-	const info = bodyFromSTL.stlImportInfo;
+	const report = bodyFromSTL.connectionReport();
+	const info = bodyFromSTL.stlImportInfo || {
+		voxelCount: bodyFromSTL.cells.length,
+		connectionCount: bodyFromSTL.cells.reduce(
+			(count, cell) => count + cell.connections.filter(connection => connection !== null).length,
+			0
+		) / 2,
+		componentCount: report.componentCount
+	};
+	bodyFromSTL.sourceType = "stl";
+	bodyFromSTL.stlImportInfo = info;
 	setOperationStatus(
 		`Voxelization complete: ${info.voxelCount} cells, `
 		+ `${info.connectionCount} connections, ${info.componentCount} component(s)`
