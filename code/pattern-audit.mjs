@@ -231,6 +231,7 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 		strictContinuityPassed,
 		cellCount: body.cells.length,
 		rowTransitionInfo: body.stlRowTransitionInfo || null,
+		layerYarnTransitionInfo: body.stlLayerYarnTransitionInfo || null,
 		unlabeledCellCount,
 		topologyValid: topology.valid,
 		topologyErrorCount: topology.errors.length,
@@ -275,6 +276,13 @@ export function formatPatternAudit(report) {
 			+ `${report.rowTransitionInfo.failedConnectionsCount} builder-failed / `
 			+ `${report.rowTransitionInfo.skippedMissingCurrentOutput} missing-output / `
 			+ `${report.rowTransitionInfo.skippedMissingNextInput} missing-input row transitions`
+		] : []),
+		...(report.layerYarnTransitionInfo ? [
+			`${report.layerYarnTransitionInfo.expectedConnectionsCount} expected / `
+			+ `${report.layerYarnTransitionInfo.connectionsCount} complete / `
+			+ `${report.layerYarnTransitionInfo.failedConnectionsCount} geometry-failed / `
+			+ `${report.layerYarnTransitionInfo.skippedMissingCurrentOutput} missing-output / `
+			+ `${report.layerYarnTransitionInfo.skippedMissingNextInput} missing-input layer yarn transitions`
 		] : []),
 		`${report.topologyComponentCount} cell components`,
 		`${report.topologyErrorCount} topology warning(s)`,

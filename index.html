@@ -854,7 +854,7 @@ window.gm = gm; //DEBUG
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
-import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-5';
+import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-6';
 import {rowTraversalDirection} from './code/stl-path.mjs?v=stl-path-20260901-1';
 
 // window.library = new sv.Library();
@@ -901,6 +901,11 @@ function runPatternAudit() {
 		rowTransitionsExpected: report.rowTransitionInfo?.expectedConnectionsCount,
 		rowTransitionsSkippedMissingOutput: report.rowTransitionInfo?.skippedMissingCurrentOutput,
 		rowTransitionsSkippedMissingInput: report.rowTransitionInfo?.skippedMissingNextInput,
+		layerYarnTransitionsComplete: report.layerYarnTransitionInfo?.connectionsCount,
+		layerYarnTransitionsFailed: report.layerYarnTransitionInfo?.failedConnectionsCount,
+		layerYarnTransitionsExpected: report.layerYarnTransitionInfo?.expectedConnectionsCount,
+		layerYarnTransitionsSkippedMissingOutput: report.layerYarnTransitionInfo?.skippedMissingCurrentOutput,
+		layerYarnTransitionsSkippedMissingInput: report.layerYarnTransitionInfo?.skippedMissingNextInput,
 		openYarnFaces: report.openYarnFaceCount,
 		openYarnFacesPerCell: report.openYarnFacesPerCell,
 		internalFreeYarnEnds: report.internalFreeEndCount,
@@ -5398,6 +5403,7 @@ async function autoConvertSTLCells() {
 		["connecting adjacent layers", connectBetweenLayers],
 		["converting decrease cells", convertToDecreaseCells],
 		["converting increase cells", convertToIncreaseCells],
+		["connecting yarn between layers", connectYarnBetweenLayers],
 		["adding yarn endpoints", addYarnInOut]
 	];
 	let currentStage = "starting";
@@ -6391,6 +6397,131 @@ function connectBetweenLayers() {
     }
     
     return;
+}
+
+// Connect the working yarn from the final row of one layer to the first row of
+// the next. The block library already contains several yarn-next-layer shapes;
+// choose one only when both of its yarn faces align exactly with the two path
+// endpoints. This is deliberately conservative so arbitrary STL geometry is
+// never connected merely because two cells are nearby.
+function connectYarnBetweenLayers() {
+	const currentPath = window.path || determinePath();
+	const candidates = Object.values(library.templates)
+		.filter(template => template.name.startsWith("yarn-next-layer"));
+	let expectedConnectionsCount = 0;
+	let connectionsCount = 0;
+	let skippedMissingCurrentOutput = 0;
+	let skippedMissingNextInput = 0;
+	let failedConnectionsCount = 0;
+	const failedTransitions = [];
+
+	function tryDirectLayerTemplate(currentCell, currentFace, nextCell, nextFace, preferredDirection) {
+		const orderedCandidates = candidates.slice().sort((a, b) => {
+			const aPreferred = a.longname.endsWith(`.${preferredDirection}`) ? 0 : 1;
+			const bPreferred = b.longname.endsWith(`.${preferredDirection}`) ? 0 : 1;
+			return aPreferred - bPreferred;
+		});
+		for (const template of orderedCandidates) {
+			const preview = checkTemplateCompatible(currentCell, currentFace, template);
+			if (!preview) continue;
+			const attachmentFace = preview.connections.findIndex(connection => (
+				connection?.cell === currentCell && connection.face === currentFace
+			));
+			if (attachmentFace === -1) continue;
+
+			for (let previewFace = 0; previewFace < preview.template.faces.length; ++previewFace) {
+				if (previewFace === attachmentFace || preview.connections[previewFace] !== null) continue;
+				if (!sv.canConnectFaces(
+					preview.template.faces[previewFace],
+					nextCell.template.faces[nextFace]
+				)) continue;
+				const previewCenter = calculateFaceCenter(preview, previewFace);
+				const nextCenter = calculateFaceCenter(nextCell, nextFace);
+				const distanceSquared = (
+					Math.pow(previewCenter.x - nextCenter.x, 2)
+					+ Math.pow(previewCenter.y - nextCenter.y, 2)
+					+ Math.pow(previewCenter.z - nextCenter.z, 2)
+				);
+				if (distanceSquared >= 0.1 * 0.1) continue;
+
+				currentCell.connections[currentFace] = {cell: preview, face: attachmentFace};
+				preview.connections[attachmentFace] = {cell: currentCell, face: currentFace};
+				preview.connections[previewFace] = {cell: nextCell, face: nextFace};
+				nextCell.connections[nextFace] = {cell: preview, face: previewFace};
+				body.cells.push(preview);
+				return template.longname;
+			}
+		}
+		return null;
+	}
+
+	for (let index = 0; index < currentPath.length - 1; ++index) {
+		const current = currentPath[index];
+		const next = currentPath[index + 1];
+		if (current.layerIndex === next.layerIndex) continue;
+		expectedConnectionsCount++;
+		const currentFace = getCurrentY1Face(current.cell, "+y1");
+		const nextFace = getCurrentY1Face(next.cell, "-y1");
+		if (currentFace === -1 || nextFace === -1) {
+			if (currentFace === -1) skippedMissingCurrentOutput++;
+			if (nextFace === -1) skippedMissingNextInput++;
+			if (failedTransitions.length < 12) {
+				failedTransitions.push({
+					pathFrom: index,
+					pathTo: index + 1,
+					currentCell: body.cells.indexOf(current.cell),
+					currentTemplate: current.cell.template.longname,
+					currentOpenYFaces: currentFace === -1 ? "none" : "+y1",
+					nextCell: body.cells.indexOf(next.cell),
+					nextTemplate: next.cell.template.longname,
+					nextOpenYFaces: nextFace === -1 ? "none" : "-y1",
+					reason: "missing path endpoint"
+				});
+			}
+			continue;
+		}
+
+		const template = tryDirectLayerTemplate(
+			current.cell,
+			currentFace,
+			next.cell,
+			nextFace,
+			current.direction
+		);
+		if (template) {
+			connectionsCount++;
+		} else {
+			failedConnectionsCount++;
+			if (failedTransitions.length < 12) {
+				failedTransitions.push({
+					pathFrom: index,
+					pathTo: index + 1,
+					currentCell: body.cells.indexOf(current.cell),
+					currentTemplate: current.cell.template.longname,
+					nextCell: body.cells.indexOf(next.cell),
+					nextTemplate: next.cell.template.longname,
+					reason: "no exact yarn-next-layer geometry"
+				});
+			}
+		}
+	}
+
+	const result = {
+		expectedConnectionsCount,
+		connectionsCount,
+		failedConnectionsCount,
+		skippedMissingCurrentOutput,
+		skippedMissingNextInput,
+		failedTransitions
+	};
+	body.stlLayerYarnTransitionInfo = result;
+	console.info(
+		`Layer yarn transitions: ${expectedConnectionsCount} expected, ${connectionsCount} complete, `
+		+ `${failedConnectionsCount} geometry failures, ${skippedMissingCurrentOutput} missing outputs, `
+		+ `${skippedMissingNextInput} missing inputs`
+	);
+	if (failedTransitions.length) console.table(failedTransitions);
+	return result;
 }
 
 // Connect +y1 and -y1 faces between adjacent rows using yarn-next-row and yarn-next-column blocks
