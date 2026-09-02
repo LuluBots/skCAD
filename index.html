@@ -1757,6 +1757,7 @@ function setTemplateFromSignature(stripped_signature) {
 // if template can be attached to face of cell, return the resulting cell
 // otherwise, return null
 function checkTemplateCompatible(cell, face, template, verbose = false) {
+	const attachmentCell = cell;
 	// Cannot connect if hovered face is already connected. 
 	if (cell.connections[face]) return null;
 
@@ -1803,15 +1804,19 @@ function checkTemplateCompatible(cell, face, template, verbose = false) {
 	}
 
 	//Check all faces with compatible types for overlapping centers:
-	for (let cell of body.cells) {
-		for (let fi = 0; fi < cell.template.faces.length; ++fi) {
+	for (const candidateCell of body.cells) {
+		// During STL conversion, do not turn incidental geometric overlap into
+		// an implicit connection. The conversion helper must explicitly attach
+		// the other endpoint of a row/layer transition.
+		if (window.strictSTLPreviewConnections && candidateCell !== attachmentCell) continue;
+		for (let fi = 0; fi < candidateCell.template.faces.length; ++fi) {
 			// if (cell.connections[fi] !== null) continue;
-			const face = cell.template.faces[fi];
+			const face = candidateCell.template.faces[fi];
 
 			// if (face.type === 'x') continue;
 			let center = gm.vec3(0.0);
 			for (let vi of face.indices) {
-				center = gm.add(center, cell.vertices[vi]);
+				center = gm.add(center, candidateCell.vertices[vi]);
 			}
 			center = gm.scale(1.0 / face.indices.length, center);
 
@@ -1831,7 +1836,7 @@ function checkTemplateCompatible(cell, face, template, verbose = false) {
 					if (verbose) console.log("face.type is x");
 					// return null; // commented out for increase and decrease skCAD
 					continue; // added for increase and decrease skCAD
-				} else if (cell.connections[fi] !== null) {
+				} else if (candidateCell.connections[fi] !== null) {
 					if (verbose) console.log("cell connection already exists");
 					return null;
 				} else if (!sv.canConnectFaces(preview.template.faces[pfi], face)) {
@@ -1840,7 +1845,7 @@ function checkTemplateCompatible(cell, face, template, verbose = false) {
 				}
 
 				// otherwise, we found a connection
-				preview.connections[pfi] = {cell:cell, face:fi};
+				preview.connections[pfi] = {cell:candidateCell, face:fi};
 			}
 		}
 	}
@@ -5386,6 +5391,7 @@ async function autoConvertSTLCells() {
 		["adding yarn endpoints", addYarnInOut]
 	];
 	let currentStage = "starting";
+	window.strictSTLPreviewConnections = true;
 
 	try {
 		for (let index = 0; index < stages.length; ++index) {
@@ -5426,6 +5432,8 @@ async function autoConvertSTLCells() {
 		cursorDirty();
 		requestRedraw();
 		throw new Error(`${currentStage}: ${err.message || err}`);
+	} finally {
+		window.strictSTLPreviewConnections = false;
 	}
 }
 
