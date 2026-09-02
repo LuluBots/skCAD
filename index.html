@@ -855,6 +855,7 @@ window.gm = gm; //DEBUG
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
 import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-5';
+import {rowTraversalDirection} from './code/stl-path.mjs?v=stl-path-20260901-1';
 
 // window.library = new sv.Library();
 
@@ -5538,7 +5539,7 @@ function determinePath() {
                     layerIndex,
                     rowIndex,
 					columnIndex,
-                    direction: rowDirection > 0 ? "right" : "left",
+					direction: rowTraversalDirection(body.sourceType, layerIndex, rowDirection),
                     isFirstInRow: row[0] === item,
                     isLastInRow: row[row.length - 1] === item,
                     isFirstLayer: layerIndex === 0,
