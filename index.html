@@ -854,7 +854,7 @@ window.gm = gm; //DEBUG
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
-import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-1';
+import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-2';
 
 // window.library = new sv.Library();
 
@@ -891,13 +891,19 @@ function runPatternAudit() {
 	console.group(summary);
 	console.table({
 		cells: report.cellCount,
+		unconvertedCells: report.unlabeledCellCount,
 		cellComponents: report.topologyComponentCount,
+		topologyWarnings: report.topologyErrorCount,
+		incompatibleConnections: report.incompatibleConnectionCount,
 		openYarnFaces: report.openYarnFaceCount,
+		openYarnFacesPerCell: report.openYarnFacesPerCell,
 		internalFreeYarnEnds: report.internalFreeEndCount,
+		internalFreeYarnEndsPerCell: report.internalFreeEndsPerCell,
 		yarnComponents: report.yarnComponentCount,
 		yarnIn: report.yarnInCount,
 		yarnOut: report.yarnOutCount,
-		directedCycleFree: report.yarnDirectionCycleFree
+		directedCycleFree: report.yarnDirectionCycleFree,
+		strictContinuityExperiment: report.strictContinuityPassed
 	});
 	if (report.topologyErrors.length) console.table(report.topologyErrors);
 	if (report.incompatibleConnections.length) console.table(report.incompatibleConnections);

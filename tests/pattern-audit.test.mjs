@@ -28,10 +28,11 @@ assert.equal(validReport.yarnComponentCount, 1);
 const brokenBody = new Body();
 brokenBody.cells.push(Cell.fromTemplate(yarnInTemplate), Cell.fromTemplate(yarnOutTemplate));
 const brokenReport = auditPattern(brokenBody);
-assert.equal(brokenReport.passed, false);
+assert.equal(brokenReport.passed, true, "author checks alone do not classify visual endpoint diagnostics as errors");
+assert.equal(brokenReport.strictContinuityPassed, false);
 assert.equal(brokenReport.openYarnFaceCount, 2);
 assert.equal(brokenReport.yarnComponentCount, 2);
-assert.match(formatPatternAudit(brokenReport), /open yarn face/);
+assert.match(formatPatternAudit(brokenReport), /Comparative diagnostics only/);
 
 const bunnyBuffer = fs.readFileSync(new URL("../patterns/stanford-bunny.body", import.meta.url));
 const unconvertedBunny = Body.fromArrayBuffer(exactArrayBuffer(bunnyBuffer), library);
@@ -40,4 +41,4 @@ assert.equal(bunnyReport.passed, false, "an unconverted voxel body must not pass
 assert.equal(bunnyReport.yarnInCount, 0);
 assert.equal(bunnyReport.yarnOutCount, 0);
 
-console.log("Pattern audit passed: valid yarn accepted; open yarn faces and unconverted bodies rejected.");
+console.log("Pattern audit passed: author compatibility and strict visual diagnostics are reported separately.");
