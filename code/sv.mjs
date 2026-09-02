@@ -139,6 +139,48 @@ export class Body {
 		}
 	}
 	check() { } //consistency check (connections point both directions)
+	connectionReport() {
+		const errors = [];
+		for (let cellIndex = 0; cellIndex < this.cells.length; ++cellIndex) {
+			const cell = this.cells[cellIndex];
+			if (cell.connections.length !== cell.template.faces.length) {
+				errors.push(`cell ${cellIndex} has ${cell.connections.length} connections for ${cell.template.faces.length} faces`);
+				continue;
+			}
+			for (let faceIndex = 0; faceIndex < cell.connections.length; ++faceIndex) {
+				const connection = cell.connections[faceIndex];
+				if (connection === null) continue;
+				if (typeof connection !== "object" || !connection.cell || !Number.isInteger(connection.face)
+				 || connection.face < 0 || connection.face >= connection.cell.connections.length) {
+					errors.push(`cell ${cellIndex} face ${faceIndex} has an invalid target`);
+					continue;
+				}
+				const reverse = connection.cell.connections[connection.face];
+				if (!reverse || reverse.cell !== cell || reverse.face !== faceIndex) {
+					errors.push(`cell ${cellIndex} face ${faceIndex} is not reciprocal`);
+				}
+			}
+		}
+
+		const visited = new Set();
+		let componentCount = 0;
+		for (const start of this.cells) {
+			if (visited.has(start)) continue;
+			componentCount += 1;
+			const queue = [start];
+			visited.add(start);
+			while (queue.length > 0) {
+				const cell = queue.pop();
+				for (const connection of cell.connections) {
+					if (connection && connection.cell && !visited.has(connection.cell)) {
+						visited.add(connection.cell);
+						queue.push(connection.cell);
+					}
+				}
+			}
+		}
+		return {valid: errors.length === 0, errors, componentCount};
+	}
 	static fromArrayBuffer(buffer, library) {
 		const text = new TextDecoder("utf-8").decode(buffer);
 		const json = stripComments(text);
@@ -248,6 +290,7 @@ export class Body {
 		}
 
 		const body = new Body();
+		const cellsByKey = new Map();
 		for (const key of filled) {
 			const [ix, iy, iz] = key.split(",").map(Number);
 			const xf = [
@@ -264,7 +307,64 @@ export class Body {
 			];
 			const cell = Cell.fromTemplate(template, xf);
 			body.cells.push(cell);
+			cellsByKey.set(key, cell);
 		}
+
+		// Infer the six geometric faces from the template itself. Template face
+		// labels are knitting semantics, so hard-coding X/Y/Z to label names is
+		// easy to get wrong. The dominant offset of each face center gives the
+		// actual geometric axis and sign.
+		const templateCenter = template.vertices.reduce(
+			(sum, vertex) => gm.add(sum, vertex), gm.vec3(0)
+		).map(value => value / template.vertices.length);
+		const faceByDirection = new Map();
+		for (let faceIndex = 0; faceIndex < template.faces.length; ++faceIndex) {
+			const face = template.faces[faceIndex];
+			const center = face.indices.reduce(
+				(sum, vertexIndex) => gm.add(sum, template.vertices[vertexIndex]), gm.vec3(0)
+			).map(value => value / face.indices.length);
+			const offset = gm.sub(center, templateCenter);
+			let axis = 0;
+			if (Math.abs(offset[1]) > Math.abs(offset[axis])) axis = 1;
+			if (Math.abs(offset[2]) > Math.abs(offset[axis])) axis = 2;
+			const sign = offset[axis] >= 0 ? 1 : -1;
+			faceByDirection.set(`${axis},${sign}`, faceIndex);
+		}
+		if (faceByDirection.size !== 6) {
+			throw new Error("Voxel template must have exactly one face in each X/Y/Z direction");
+		}
+
+		let connectionCount = 0;
+		const positiveNeighbors = [
+			[1, 0, 0, 0],
+			[0, 1, 0, 1],
+			[0, 0, 1, 2]
+		];
+		for (const key of filled) {
+			const [ix, iy, iz] = key.split(",").map(Number);
+			const cell = cellsByKey.get(key);
+			for (const [ox, oy, oz, axis] of positiveNeighbors) {
+				const neighbor = cellsByKey.get(`${ix + ox},${iy + oy},${iz + oz}`);
+				if (!neighbor) continue;
+				const face = faceByDirection.get(`${axis},1`);
+				const neighborFace = faceByDirection.get(`${axis},-1`);
+				if (face === undefined || neighborFace === undefined) {
+					throw new Error(`Voxel template is missing a geometric face on axis ${axis}`);
+				}
+				if (!canConnectFaces(cell.template.faces[face], neighbor.template.faces[neighborFace])) {
+					throw new Error(`Voxel template faces cannot connect on axis ${axis}`);
+				}
+				cell.connections[face] = {cell: neighbor, face: neighborFace};
+				neighbor.connections[neighborFace] = {cell, face};
+				connectionCount += 1;
+			}
+		}
+
+		body.sourceType = "stl";
+		body.stlImportInfo = {voxelCount: body.cells.length, connectionCount};
+		const report = body.connectionReport();
+		if (!report.valid) throw new Error(`STL voxel connection validation failed: ${report.errors[0]}`);
+		body.stlImportInfo.componentCount = report.componentCount;
 
 		return body;
 	}

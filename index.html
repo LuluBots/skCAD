@@ -734,6 +734,8 @@ function readFile(file) {
 	reader.onload = function(){
 		console.log("File was " + reader.result.byteLength + " bytes long.");
 		window.body = sv.Body.fromArrayBuffer(reader.result, library);
+		window.operationStatus = null;
+		window.resetEditPathMode?.();
 
 		bodyDirty();
 		cursorDirty();
@@ -854,14 +856,37 @@ window.sv = sv; //DEBUG
 
 // for auto convert
 let editPathMode = false;
+function resetEditPathMode() {
+	editPathMode = false;
+	window.path = undefined;
+	document.getElementById("edit-path").textContent = "Edit/Pattern";
+}
+window.resetEditPathMode = resetEditPathMode;
 
-document.getElementById("edit-path").addEventListener('click', function() {
-    editPathMode = !editPathMode;
+document.getElementById("edit-path").addEventListener('click', async function() {
+    if (this.disabled) return;
 
-    if (editPathMode) {
-        autoConvertCells();
+    if (!editPathMode) {
+        if (body.sourceType === "stl") {
+            this.disabled = true;
+            try {
+                await autoConvertSTLCells();
+                editPathMode = true;
+            } catch (err) {
+                console.error("STL pattern conversion failed:", err);
+                setOperationStatus("STL pattern conversion failed: " + (err.message || err));
+            } finally {
+                this.disabled = false;
+            }
+        } else {
+            // Preserve the author's original behavior for .body files.
+            editPathMode = true;
+            autoConvertCells();
+        }
         this.textContent = "Edit/Pattern";
     } else {
+        editPathMode = false;
+		window.operationStatus = null;
         convertCellsToNullByDirection();
 
 		// Automatically select unlabeled.right.alt template when returning to edit mode
@@ -915,6 +940,11 @@ const ext_WEBGL_depth_texture = gl.getExtension("WEBGL_depth_texture"); //used f
 
 const STATUS_LINE = document.getElementById("status-line");
 window.STATUS_LINE = STATUS_LINE;
+window.operationStatus = null;
+function setOperationStatus(message) {
+	window.operationStatus = message;
+	STATUS_LINE.innerText = message;
+}
 
 // "enum" representing possible displays
 const ViewMode = {
@@ -4659,7 +4689,7 @@ function redrawPatternNonDepthShaded(pixelRatio) {
 		if (CURSOR.over) {
 			info += `; Hovered: ${CURSOR.over.cell.template.longsignature()} / face: ${CURSOR.over.face} (${CURSOR.over.cell.template.faces[CURSOR.over.face].type})`;
 		}
-		STATUS_LINE.innerText = info;
+		STATUS_LINE.innerText = window.operationStatus || info;
 	}
 
 	// show info about hovered block in sidebar
@@ -4787,7 +4817,7 @@ function redrawTemplate(pixelRatio) {
 		} else {
 			info += `No Template`;
 		}
-		STATUS_LINE.innerText = info;
+		STATUS_LINE.innerText = window.operationStatus || info;
 	}
 
 	visPreviewLines.update();
@@ -5090,7 +5120,7 @@ document.getElementById("voxelize").addEventListener("click", async function() {
     const dz = Math.abs(templateVertices[1][2] - templateVertices[0][2]);
 
 	// while voxelization is in progress, show a message
-    STATUS_LINE.innerText = "Voxelizing...";
+	setOperationStatus("Voxelizing STL...");
     
 	// delay to allow UI to update
     await new Promise(resolve => setTimeout(resolve, 10));
@@ -5104,6 +5134,7 @@ document.getElementById("voxelize").addEventListener("click", async function() {
 
 	// swithch to the new body
     window.body = bodyFromSTL;
+	resetEditPathMode();
     
 	// make the stl mesh invisible
     cleanupGLMesh();
@@ -5115,10 +5146,14 @@ document.getElementById("voxelize").addEventListener("click", async function() {
     // requestRedraw();
     
     // complete message
-    STATUS_LINE.innerText = `Voxelization complete: ${bodyFromSTL.cells.length} cells created`;
+	const info = bodyFromSTL.stlImportInfo;
+	setOperationStatus(
+		`Voxelization complete: ${info.voxelCount} cells, `
+		+ `${info.connectionCount} connections, ${info.componentCount} component(s)`
+	);
   } catch (err) {
 	console.error("Voxelization failed:", err);
-    STATUS_LINE.innerText = "Voxelization failed: " + err.message;
+	setOperationStatus("Voxelization failed: " + err.message);
   }
 });
 
@@ -5158,6 +5193,8 @@ stlInput.addEventListener("change", function (evt) {
 
   // set the filename to show later
   setFilename(file.name);
+	window.operationStatus = null;
+	resetEditPathMode();
 
   // clear existing body
   window.body = new sv.Body();
@@ -5246,6 +5283,73 @@ function autoConvertCells() {
 
     bodyDirty();
     requestRedraw();
+}
+
+// Convert an STL-derived voxel body through the author's pattern pipeline.
+// This wrapper is intentionally STL-only: it adds validation, progress updates,
+// UI yielding, and rollback without changing autoConvertCells() for .body files.
+async function autoConvertSTLCells() {
+	const initialReport = body.connectionReport();
+	if (!initialReport.valid) {
+		throw new Error(`invalid voxel topology: ${initialReport.errors[0]}`);
+	}
+	if (body.cells.length === 0) {
+		throw new Error("the voxel body is empty");
+	}
+	if (initialReport.componentCount !== 1) {
+		throw new Error(
+			`the voxel body has ${initialReport.componentCount} disconnected components; `
+			+ "use a single connected solid or repair the STL before pattern conversion"
+		);
+	}
+
+	const snapshot = body.toData();
+	const sourceInfo = body.stlImportInfo;
+	const stages = [
+		["determining cell order", determinePath],
+		["preparing layer transitions", addUnlabeledCellsBetweenLayers],
+		["converting voxel cells to knit cells", convertCellsAlongPath],
+		["adding drop cells", addDropCells],
+		["adding bind-off cells", addBindOff],
+		["connecting cells within rows", connectWithinRows],
+		["connecting adjacent rows", connectBetweenRows],
+		["connecting adjacent layers", connectBetweenLayers],
+		["converting decrease cells", convertToDecreaseCells],
+		["converting increase cells", convertToIncreaseCells],
+		["adding yarn endpoints", addYarnInOut]
+	];
+	let currentStage = "starting";
+
+	try {
+		for (let index = 0; index < stages.length; ++index) {
+			[currentStage] = stages[index];
+			setOperationStatus(`STL pattern conversion ${index + 1}/${stages.length}: ${currentStage}...`);
+			// Let the browser paint the status before running the synchronous stage.
+			await new Promise(resolve => setTimeout(resolve, 0));
+			stages[index][1]();
+
+			const report = body.connectionReport();
+			if (!report.valid) {
+				throw new Error(`invalid topology: ${report.errors[0]}`);
+			}
+		}
+
+		bodyDirty();
+		cursorDirty();
+		setOperationStatus(`STL pattern conversion complete: ${body.cells.length} pattern cells`);
+		requestRedraw();
+	} catch (err) {
+		// The author's conversion mutates the body in place. Restore the exact
+		// voxel body so a failed attempt remains inspectable and retryable.
+		window.body = sv.Body.fromData(snapshot, library);
+		body.sourceType = "stl";
+		body.stlImportInfo = sourceInfo;
+		window.path = undefined;
+		bodyDirty();
+		cursorDirty();
+		requestRedraw();
+		throw new Error(`${currentStage}: ${err.message || err}`);
+	}
 }
 
 // determine path (cell order) based on coord
