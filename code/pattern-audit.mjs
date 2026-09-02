@@ -227,6 +227,7 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 		passed,
 		strictContinuityPassed,
 		cellCount: body.cells.length,
+		rowTransitionInfo: body.stlRowTransitionInfo || null,
 		unlabeledCellCount,
 		topologyValid: topology.valid,
 		topologyErrorCount: topology.errors.length,
@@ -264,6 +265,9 @@ export function formatPatternAudit(report) {
 		failures.push(`directed yarn cycle${cycleCells ? ` (${cycleCells} -> ${report.yarnDirectionCycle[0].cell})` : ""}`);
 	}
 	const diagnostics = [
+		...(report.rowTransitionInfo ? [
+			`${report.rowTransitionInfo.connectionsCount} complete / ${report.rowTransitionInfo.failedConnectionsCount} failed row transitions`
+		] : []),
 		`${report.topologyComponentCount} cell components`,
 		`${report.topologyErrorCount} topology warning(s)`,
 		`${report.incompatibleConnectionCount} incompatible connection warning(s)`,

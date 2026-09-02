@@ -854,7 +854,7 @@ window.gm = gm; //DEBUG
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
-import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-3';
+import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-4';
 
 // window.library = new sv.Library();
 
@@ -895,6 +895,8 @@ function runPatternAudit() {
 		cellComponents: report.topologyComponentCount,
 		topologyWarnings: report.topologyErrorCount,
 		incompatibleConnections: report.incompatibleConnectionCount,
+		rowTransitionsComplete: report.rowTransitionInfo?.connectionsCount,
+		rowTransitionsFailed: report.rowTransitionInfo?.failedConnectionsCount,
 		openYarnFaces: report.openYarnFaceCount,
 		openYarnFacesPerCell: report.openYarnFacesPerCell,
 		internalFreeYarnEnds: report.internalFreeEndCount,
@@ -6356,6 +6358,43 @@ function connectBetweenRows() {
     });
     
     let connectionsCount = 0;
+    let failedConnectionsCount = 0;
+
+	function rollbackGeneratedCells(startIndex) {
+		const generated = new Set(body.cells.slice(startIndex));
+		for (const cell of body.cells.slice(0, startIndex)) {
+			for (let face = 0; face < cell.connections.length; ++face) {
+				const connection = cell.connections[face];
+				if (connection && generated.has(connection.cell)) cell.connections[face] = null;
+			}
+		}
+		body.cells.length = startIndex;
+	}
+
+	function transitionIsComplete(startIndex, currentCell, nextCell) {
+		const generated = new Set(body.cells.slice(startIndex));
+		const visited = new Set([currentCell]);
+		const queue = [currentCell];
+		while (queue.length > 0) {
+			const cell = queue.pop();
+			for (const connection of cell.connections) {
+				if (!connection) continue;
+				if (connection.cell === nextCell) return true;
+				if (!generated.has(connection.cell) || visited.has(connection.cell)) continue;
+				visited.add(connection.cell);
+				queue.push(connection.cell);
+			}
+		}
+		return false;
+	}
+
+	function tryTransition(builder, currentCell, nextCell) {
+		const startIndex = body.cells.length;
+		builder();
+		if (transitionIsComplete(startIndex, currentCell, nextCell)) return true;
+		rollbackGeneratedCells(startIndex);
+		return false;
+	}
     
     
     // Process connections following the path order
@@ -6398,22 +6437,44 @@ function connectBetweenRows() {
 		const xDistance = Math.abs(currentItem.x - nextItem.x) / getTemplateLength(currentItem.cell.template, 'X');
 		const cellDistance = Math.round(xDistance);
         
-        if (xDistance < 0.1) {
-            // Case 3: Same X coordinate - direct row-to-row connection
-            addYarnNextRowForDirectConnection(currentCell, currentY1Face, nextCell, nextY1Face, currentRowDirection);
-            connectionsCount++;
-        } else if (isPlusY1Protruding && !isMinusY1Protruding) {
-            // Case 1: +y1 face is protruding
-			addYarnStructureForPlusY1Protruding(currentCell, currentY1Face, nextCell, nextY1Face, cellDistance, currentRowDirection);
-            connectionsCount++;
-        } else if (isMinusY1Protruding && !isPlusY1Protruding) {
-            // Case 2: -y1 face is protruding  
-            addYarnStructureForMinusY1Protruding(currentCell, currentY1Face, nextCell, nextY1Face, cellDistance, currentRowDirection);
+		const direct = () => addYarnNextRowForDirectConnection(
+			currentCell, currentY1Face, nextCell, nextY1Face, currentRowDirection
+		);
+		const plusChain = () => addYarnStructureForPlusY1Protruding(
+			currentCell, currentY1Face, nextCell, nextY1Face, cellDistance, currentRowDirection
+		);
+		const minusChain = () => addYarnStructureForMinusY1Protruding(
+			currentCell, currentY1Face, nextCell, nextY1Face, cellDistance, currentRowDirection
+		);
+		let strategies;
+		if (xDistance < 0.1) {
+			strategies = [direct];
+		} else if (isPlusY1Protruding && !isMinusY1Protruding) {
+			strategies = [plusChain, minusChain];
+		} else if (isMinusY1Protruding && !isPlusY1Protruding) {
+			strategies = [minusChain, plusChain];
+		} else {
+			// A non-zero horizontal offset cannot be bridged by the fixed-size
+			// direct connector. Try both explicit column-chain orientations.
+			strategies = [plusChain, minusChain];
+		}
+
+		let connected = false;
+		for (const strategy of strategies) {
+			if (tryTransition(strategy, currentCell, nextCell)) {
+				connected = true;
+				break;
+			}
+		}
+		if (connected) {
 			connectionsCount++;
-        } else {
-            addYarnNextRowForDirectConnection(currentCell, currentY1Face, nextCell, nextY1Face, currentRowDirection);
-            connectionsCount++;
-        }
+		} else {
+			failedConnectionsCount++;
+			console.warn(
+				`Could not create complete row transition from path cell ${i} to ${i + 1}`,
+				{currentCell: body.cells.indexOf(currentCell), nextCell: body.cells.indexOf(nextCell), cellDistance}
+			);
+		}
     }
         
     if (connectionsCount > 0) {
@@ -6421,7 +6482,10 @@ function connectBetweenRows() {
         requestRedraw();
     }
     
-    return;
+	console.info(`Row transitions: ${connectionsCount} complete, ${failedConnectionsCount} failed`);
+	const result = {connectionsCount, failedConnectionsCount};
+	if (body.sourceType === "stl") body.stlRowTransitionInfo = result;
+    return result;
 }
 
 // Helper function to caculate the template x/y/z length for xDistance/cellDistance
