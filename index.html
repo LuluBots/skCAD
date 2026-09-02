@@ -5401,7 +5401,48 @@ async function autoConvertSTLCells() {
 		["adding yarn endpoints", addYarnInOut]
 	];
 	let currentStage = "starting";
+	const stageDiagnostics = [];
 	window.strictSTLPreviewConnections = true;
+
+	function captureStageDiagnostics(stage) {
+		const report = auditPattern(body, {sampleLimit: Number.MAX_SAFE_INTEGER});
+		const cellIndex = new Map(body.cells.map((cell, index) => [cell, index]));
+		const brokenAdjacentPairs = [];
+		const currentPath = window.path || [];
+		for (let index = 0; index < currentPath.length - 1; ++index) {
+			const current = currentPath[index];
+			const next = currentPath[index + 1];
+			if (current.layerIndex !== next.layerIndex || current.rowIndex !== next.rowIndex) continue;
+			const xDistance = Math.abs(getCellCenter(current.cell).x - getCellCenter(next.cell).x);
+			const adjacentThreshold = getTemplateLength(current.cell.template, "X") * 1.1;
+			if (xDistance > adjacentThreshold) continue;
+			if (current.cell.connections.some(connection => connection?.cell === next.cell)) continue;
+			brokenAdjacentPairs.push({
+				pathFrom: index,
+				pathTo: index + 1,
+				cell: cellIndex.get(current.cell),
+				template: current.cell.template.longname,
+				nextCell: cellIndex.get(next.cell),
+				nextTemplate: next.cell.template.longname,
+				direction: current.direction
+			});
+		}
+
+		const openByTemplate = report.openYarnFaces.reduce((counts, item) => {
+			counts[item.template] = (counts[item.template] || 0) + 1;
+			return counts;
+		}, {});
+		stageDiagnostics.push({
+			stage,
+			cells: report.cellCount,
+			openYarnFaces: report.openYarnFaceCount,
+			openYarnFacesByType: report.openYarnFacesByType,
+			openByTemplate,
+			internalFreeEnds: report.internalFreeEndCount,
+			yarnComponents: report.yarnComponentCount,
+			brokenAdjacentPairs
+		});
+	}
 
 	try {
 		for (let index = 0; index < stages.length; ++index) {
@@ -5422,7 +5463,33 @@ async function autoConvertSTLCells() {
 			if (!report.valid) {
 				throw new Error(`invalid topology: ${report.errors[0]}`);
 			}
+			captureStageDiagnostics(currentStage);
 		}
+		body.stlStageDiagnostics = stageDiagnostics;
+		console.group("STL conversion stage diagnostics");
+		console.table(stageDiagnostics.map(item => ({
+			stage: item.stage,
+			cells: item.cells,
+			openYarnFaces: item.openYarnFaces,
+			"+y1": item.openYarnFacesByType["+y1"] || 0,
+			"-y1": item.openYarnFacesByType["-y1"] || 0,
+			"+d1": item.openYarnFacesByType["+d1"] || 0,
+			"-d1": item.openYarnFacesByType["-d1"] || 0,
+			"+d2": item.openYarnFacesByType["+d2"] || 0,
+			"-d2": item.openYarnFacesByType["-d2"] || 0,
+			"-L1": item.openYarnFacesByType["-L1"] || 0,
+			internalFreeEnds: item.internalFreeEnds,
+			yarnComponents: item.yarnComponents,
+			brokenAdjacentPairs: item.brokenAdjacentPairs.length
+		})));
+		const finalDiagnostics = stageDiagnostics[stageDiagnostics.length - 1];
+		if (finalDiagnostics) {
+			console.info("Final open yarn faces by template:", finalDiagnostics.openByTemplate);
+			if (finalDiagnostics.brokenAdjacentPairs.length) {
+				console.table(finalDiagnostics.brokenAdjacentPairs.slice(0, 24));
+			}
+		}
+		console.groupEnd();
 
 		bodyDirty();
 		cursorDirty();
