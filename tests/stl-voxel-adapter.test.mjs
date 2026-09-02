@@ -57,6 +57,28 @@ assert.equal(voxelBody.stlImportInfo.componentCount, 1, "cube voxels should form
 assert.equal(voxelReport.valid, true, voxelReport.errors.join("\n"));
 assert.equal(voxelBody.sourceType, "stl");
 
+const sourceCell = voxelBody.cells.find(cell => cell.connections.some(connection => connection !== null));
+const sourceFace = sourceCell.connections.findIndex(connection => connection !== null);
+const oneSidedConnection = sourceCell.connections[sourceFace];
+oneSidedConnection.cell.connections[oneSidedConnection.face] = null;
+assert.equal(voxelBody.connectionReport().valid, false, "one-sided links should be detected");
+assert.equal(voxelBody.repairMissingReciprocalConnections(), 1);
+assert.equal(voxelBody.connectionReport().valid, true, "a unique missing reverse link should be repaired");
+
+const conflictBody = new sv.Body();
+const conflictA = sv.Cell.fromTemplate(voxelTemplate);
+const conflictB = sv.Cell.fromTemplate(voxelTemplate);
+const conflictC = sv.Cell.fromTemplate(voxelTemplate);
+conflictA.connections[3] = {cell: conflictB, face: 1};
+conflictC.connections[3] = {cell: conflictB, face: 1};
+conflictBody.cells.push(conflictA, conflictB, conflictC);
+assert.throws(
+	() => conflictBody.repairMissingReciprocalConnections(),
+	/multiple cells claim the same target face/,
+	"ambiguous links must fail instead of overwriting a connection"
+);
+assert.equal(conflictB.connections[1], null, "failed repair must not partially mutate the target");
+
 function faceCenter(cell, faceIndex) {
 	const indices = cell.template.faces[faceIndex].indices;
 	return [0, 1, 2].map(axis => (

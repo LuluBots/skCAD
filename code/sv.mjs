@@ -181,6 +181,47 @@ export class Body {
 		}
 		return {valid: errors.length === 0, errors, componentCount};
 	}
+	repairMissingReciprocalConnections() {
+		const pending = [];
+		const claims = new Map();
+
+		for (let cellIndex = 0; cellIndex < this.cells.length; ++cellIndex) {
+			const cell = this.cells[cellIndex];
+			for (let faceIndex = 0; faceIndex < cell.connections.length; ++faceIndex) {
+				const connection = cell.connections[faceIndex];
+				if (connection === null) continue;
+				if (typeof connection !== "object" || !connection.cell || !Number.isInteger(connection.face)
+				 || connection.face < 0 || connection.face >= connection.cell.connections.length) {
+					throw new Error(`cell ${cellIndex} face ${faceIndex} has an invalid connection target`);
+				}
+
+				const reverse = connection.cell.connections[connection.face];
+				if (reverse !== null) {
+					if (reverse.cell !== cell || reverse.face !== faceIndex) {
+						throw new Error(`cell ${cellIndex} face ${faceIndex} conflicts with an existing reverse connection`);
+					}
+					continue;
+				}
+
+				let targetClaims = claims.get(connection.cell);
+				if (!targetClaims) {
+					targetClaims = new Map();
+					claims.set(connection.cell, targetClaims);
+				}
+				const existingClaim = targetClaims.get(connection.face);
+				if (existingClaim && (existingClaim.cell !== cell || existingClaim.face !== faceIndex)) {
+					throw new Error(`multiple cells claim the same target face from cell ${cellIndex} face ${faceIndex}`);
+				}
+				targetClaims.set(connection.face, {cell, face: faceIndex});
+				pending.push({cell, face: faceIndex, connection});
+			}
+		}
+
+		for (const {cell, face, connection} of pending) {
+			connection.cell.connections[connection.face] = {cell, face};
+		}
+		return pending.length;
+	}
 	static fromArrayBuffer(buffer, library) {
 		const text = new TextDecoder("utf-8").decode(buffer);
 		const json = stripComments(text);

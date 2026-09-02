@@ -850,7 +850,7 @@ window.gm = gm; //DEBUG
 
 // Keep the HTML and STL adapter module on the same deployed version. GitHub
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
-import * as sv from './code/sv.mjs?v=stl-adapter-20260901-2';
+import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
 
 // window.library = new sv.Library();
@@ -906,7 +906,7 @@ document.getElementById("edit-path").addEventListener('click', async function() 
 });
 
 // for STL import
-import {loadLibraryFromURL} from './code/sv.mjs?v=stl-adapter-20260901-2';
+import {loadLibraryFromURL} from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.library = await loadLibraryFromURL("./block-library/blocks.json");
 
 
@@ -5339,6 +5339,13 @@ async function autoConvertSTLCells() {
 			// Let the browser paint the status before running the synchronous stage.
 			await new Promise(resolve => setTimeout(resolve, 0));
 			stages[index][1]();
+			const repairedConnections = body.repairMissingReciprocalConnections();
+			if (repairedConnections > 0) {
+				console.info(
+					`STL adapter repaired ${repairedConnections} missing reverse connection(s) `
+					+ `after ${currentStage}`
+				);
+			}
 
 			const report = body.connectionReport();
 			if (!report.valid) {
