@@ -538,6 +538,7 @@ body.lightmode #darkmode-checkbox-label::after {
 <div id="controls">
 
 <button id="edit-path" class="controlsButton">Edit/Pattern</button>
+<button id="check-pattern" class="controlsButton">Check Pattern</button>
 <button id="indicate-loop" class="controlsButton">Indicate Loop</button>
 <input id="load-stl" type="file" style="display:none" />
 <label id="load-stl-label" for="load-stl" class="controlsButton">Load STL</label>
@@ -702,6 +703,7 @@ body.lightmode #darkmode-checkbox-label::after {
 <div id="message-box">	
 	<div id="cycle-text"></div>
 	<div id="yarn-count-text"></div>
+	<div id="pattern-audit-text"></div>
 </div>
 
 
@@ -852,6 +854,7 @@ window.gm = gm; //DEBUG
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
+import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-1';
 
 // window.library = new sv.Library();
 
@@ -862,8 +865,53 @@ function resetEditPathMode() {
 	editPathMode = false;
 	window.path = undefined;
 	document.getElementById("edit-path").textContent = "Edit/Pattern";
+	document.getElementById("pattern-audit-text").textContent = "";
 }
 window.resetEditPathMode = resetEditPathMode;
+
+function runPatternAudit() {
+	const report = auditPattern(body);
+	const summary = formatPatternAudit(report);
+	body.patternAudit = report;
+	setOperationStatus(summary);
+	const sampleDetails = [];
+	if (report.openYarnFaces.length) {
+		sampleDetails.push(
+			"Open yarn cells: "
+			+ report.openYarnFaces.map(item => `${item.cell}:${item.type}`).join(", ")
+		);
+	}
+	if (report.internalFreeEnds.length) {
+		sampleDetails.push(
+			"Internal free ends: "
+			+ report.internalFreeEnds.map(item => `${item.cell}:${item.template}`).join(", ")
+		);
+	}
+	document.getElementById("pattern-audit-text").textContent = [summary, ...sampleDetails].join(" | ");
+	console.group(summary);
+	console.table({
+		cells: report.cellCount,
+		cellComponents: report.topologyComponentCount,
+		openYarnFaces: report.openYarnFaceCount,
+		internalFreeYarnEnds: report.internalFreeEndCount,
+		yarnComponents: report.yarnComponentCount,
+		yarnIn: report.yarnInCount,
+		yarnOut: report.yarnOutCount,
+		directedCycleFree: report.yarnDirectionCycleFree
+	});
+	if (report.topologyErrors.length) console.table(report.topologyErrors);
+	if (report.incompatibleConnections.length) console.table(report.incompatibleConnections);
+	if (report.invalidYarnEndpoints.length) console.table(report.invalidYarnEndpoints);
+	if (report.openYarnFaces.length) console.table(report.openYarnFaces);
+	if (report.internalFreeEnds.length) console.table(report.internalFreeEnds);
+	console.groupEnd();
+	return report;
+}
+window.runPatternAudit = runPatternAudit;
+
+document.getElementById("check-pattern").addEventListener("click", function() {
+	runPatternAudit();
+});
 
 document.getElementById("edit-path").addEventListener('click', async function() {
     if (this.disabled) return;
@@ -5355,7 +5403,10 @@ async function autoConvertSTLCells() {
 
 		bodyDirty();
 		cursorDirty();
-		setOperationStatus(`STL pattern conversion complete: ${body.cells.length} pattern cells`);
+		const audit = runPatternAudit();
+		if (!audit.passed) {
+			console.warn("STL conversion produced a pattern that failed the quality audit.");
+		}
 		requestRedraw();
 	} catch (err) {
 		// The author's conversion mutates the body in place. Restore the exact

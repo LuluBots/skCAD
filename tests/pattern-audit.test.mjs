@@ -1,0 +1,43 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+import {Body, Cell, Library} from "../code/sv.mjs";
+import {auditPattern, formatPatternAudit} from "../code/pattern-audit.mjs";
+
+function exactArrayBuffer(buffer) {
+	return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+const libraryBuffer = fs.readFileSync(new URL("../block-library/blocks.json", import.meta.url));
+const library = Library.fromArrayBuffer(exactArrayBuffer(libraryBuffer));
+const yarnInTemplate = library.getTemplateByLongname("yarn-in.right");
+const yarnOutTemplate = library.getTemplateByLongname("yarn-out.right");
+
+const validBody = new Body();
+const yarnIn = Cell.fromTemplate(yarnInTemplate);
+const yarnOut = Cell.fromTemplate(yarnOutTemplate);
+yarnIn.connections[4] = {cell: yarnOut, face: 2};
+yarnOut.connections[2] = {cell: yarnIn, face: 4};
+validBody.cells.push(yarnIn, yarnOut);
+
+const validReport = auditPattern(validBody);
+assert.equal(validReport.passed, true, formatPatternAudit(validReport));
+assert.equal(validReport.openYarnFaceCount, 0);
+assert.equal(validReport.yarnComponentCount, 1);
+
+const brokenBody = new Body();
+brokenBody.cells.push(Cell.fromTemplate(yarnInTemplate), Cell.fromTemplate(yarnOutTemplate));
+const brokenReport = auditPattern(brokenBody);
+assert.equal(brokenReport.passed, false);
+assert.equal(brokenReport.openYarnFaceCount, 2);
+assert.equal(brokenReport.yarnComponentCount, 2);
+assert.match(formatPatternAudit(brokenReport), /open yarn face/);
+
+const bunnyBuffer = fs.readFileSync(new URL("../patterns/stanford-bunny.body", import.meta.url));
+const unconvertedBunny = Body.fromArrayBuffer(exactArrayBuffer(bunnyBuffer), library);
+const bunnyReport = auditPattern(unconvertedBunny);
+assert.equal(bunnyReport.passed, false, "an unconverted voxel body must not pass as a knitting pattern");
+assert.equal(bunnyReport.yarnInCount, 0);
+assert.equal(bunnyReport.yarnOutCount, 0);
+
+console.log("Pattern audit passed: valid yarn accepted; open yarn faces and unconverted bodies rejected.");
