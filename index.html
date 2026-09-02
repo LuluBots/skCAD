@@ -6455,6 +6455,81 @@ function connectYarnBetweenLayers() {
 		return null;
 	}
 
+	// Some STL layers start at a different row or column. In that case a
+	// single layer connector cannot reach the next path endpoint. Search a
+	// short path made only from the library's yarn-next-* blocks. Every
+	// candidate is still placed by exact face alignment and the final face
+	// must coincide with the requested endpoint.
+	function tryLayerYarnPath(currentCell, currentFace, nextCell, nextFace) {
+		const pathCandidates = Object.values(library.templates)
+			.filter(template => template.name.startsWith("yarn-next-"));
+		const targetCenter = calculateFaceCenter(nextCell, nextFace);
+		const queue = [{cell: currentCell, outputFace: currentFace, chain: [], depth: 0}];
+		const visited = new Set();
+
+		function stateKey(cell, face) {
+			const center = calculateFaceCenter(cell, face);
+			return `${Math.round(center.x * 100)},${Math.round(center.y * 100)},${Math.round(center.z * 100)},${cell.template.faces[face].type}`;
+		}
+
+		while (queue.length > 0) {
+			const state = queue.shift();
+			if (state.depth >= 8) continue;
+			const key = stateKey(state.cell, state.outputFace);
+			if (visited.has(key)) continue;
+			visited.add(key);
+
+			for (const candidate of pathCandidates) {
+				const preview = checkTemplateCompatible(state.cell, state.outputFace, candidate);
+				if (!preview) continue;
+				let inputFace = preview.connections.findIndex(connection => (
+					connection?.cell === state.cell && connection.face === state.outputFace
+				));
+				if (inputFace === -1) {
+					inputFace = preview.template.faces.findIndex(face => (
+						sv.canConnectFaces(state.cell.template.faces[state.outputFace], face)
+					));
+				}
+				if (inputFace === -1) continue;
+
+				for (let outputFace = 0; outputFace < preview.template.faces.length; ++outputFace) {
+					if (outputFace === inputFace || preview.connections[outputFace] !== null) continue;
+					if (preview.template.faces[outputFace].type !== "+y1") continue;
+					const outputCenter = calculateFaceCenter(preview, outputFace);
+					const distanceSquared = (
+						Math.pow(outputCenter.x - targetCenter.x, 2)
+						+ Math.pow(outputCenter.y - targetCenter.y, 2)
+						+ Math.pow(outputCenter.z - targetCenter.z, 2)
+					);
+					if (distanceSquared < 0.1 * 0.1
+						&& sv.canConnectFaces(preview.template.faces[outputFace], nextCell.template.faces[nextFace])) {
+						const chain = state.chain.concat([{cell: preview, inputFace, outputFace}]);
+						let previousCell = currentCell;
+						let previousFace = currentFace;
+						for (const item of chain) {
+							previousCell.connections[previousFace] = {cell: item.cell, face: item.inputFace};
+							item.cell.connections[item.inputFace] = {cell: previousCell, face: previousFace};
+							previousCell = item.cell;
+							previousFace = item.outputFace;
+						}
+						previousCell.connections[previousFace] = {cell: nextCell, face: nextFace};
+						nextCell.connections[nextFace] = {cell: previousCell, face: previousFace};
+						body.cells.push(...chain.map(item => item.cell));
+						return chain.map(item => item.cell.template.longname).join(" -> ");
+					}
+				}
+
+				queue.push({
+					cell: preview,
+					outputFace,
+					chain: state.chain.concat([{cell: preview, inputFace, outputFace}]),
+					depth: state.depth + 1
+				});
+			}
+		}
+		return null;
+	}
+
 	for (let index = 0; index < currentPath.length - 1; ++index) {
 		const current = currentPath[index];
 		const next = currentPath[index + 1];
@@ -6488,7 +6563,13 @@ function connectYarnBetweenLayers() {
 			nextFace,
 			current.direction
 		);
-		if (template) {
+		const pathTemplate = template || tryLayerYarnPath(
+			current.cell,
+			currentFace,
+			next.cell,
+			nextFace
+		);
+		if (pathTemplate) {
 			connectionsCount++;
 		} else {
 			failedConnectionsCount++;
