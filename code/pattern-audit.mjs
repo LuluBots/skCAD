@@ -144,7 +144,11 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 			const connection = cell.connections[face];
 			if (!connection || !cellIndex.has(connection.cell)
 			 || !cell.template.faces[face].type.startsWith("-y")) continue;
-			outgoing.get(cell).push(connection.cell);
+			outgoing.get(cell).push({
+				cell: connection.cell,
+				face,
+				otherFace: connection.face
+			});
 			inDegree.set(connection.cell, (inDegree.get(connection.cell) || 0) + 1);
 		}
 	}
@@ -153,13 +157,46 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 	while (queue.length > 0) {
 		const cell = queue.pop();
 		visitedCount += 1;
-		for (const next of outgoing.get(cell)) {
-			const degree = inDegree.get(next) - 1;
-			inDegree.set(next, degree);
-			if (degree === 0) queue.push(next);
+		for (const edge of outgoing.get(cell)) {
+			const degree = inDegree.get(edge.cell) - 1;
+			inDegree.set(edge.cell, degree);
+			if (degree === 0) queue.push(edge.cell);
 		}
 	}
 	const yarnDirectionCycleFree = visitedCount === body.cells.length;
+	let yarnDirectionCycle = [];
+	if (!yarnDirectionCycleFree) {
+		const remaining = new Set(body.cells.filter(cell => inDegree.get(cell) > 0));
+		for (const start of remaining) {
+			const position = new Map();
+			const path = [];
+			let current = start;
+			while (current && remaining.has(current)) {
+				if (position.has(current)) {
+					const cycleCells = path.slice(position.get(current));
+					yarnDirectionCycle = cycleCells.map((cell, index) => {
+						const next = cycleCells[(index + 1) % cycleCells.length];
+						const edge = outgoing.get(cell).find(candidate => candidate.cell === next);
+						return {
+							cell: cellIndex.get(cell),
+							template: cell.template.longname,
+							face: edge?.face,
+							type: edge ? cell.template.faces[edge.face].type : undefined,
+							nextCell: cellIndex.get(next),
+							nextFace: edge?.otherFace,
+							nextType: edge ? next.template.faces[edge.otherFace].type : undefined
+						};
+					});
+					break;
+				}
+				position.set(current, path.length);
+				path.push(current);
+				const edge = outgoing.get(current).find(candidate => remaining.has(candidate.cell));
+				current = edge?.cell;
+			}
+			if (yarnDirectionCycle.length > 0) break;
+		}
+	}
 
 	// These are the conditions enforced by the author's conversion/scheduling
 	// workflow. Visual yarn fragments and disconnected operation blocks are
@@ -210,7 +247,8 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 		yarnOutCount,
 		yarnSegmentCount: segments.length,
 		yarnComponentCount,
-		yarnDirectionCycleFree
+		yarnDirectionCycleFree,
+		yarnDirectionCycle
 	};
 }
 
@@ -221,7 +259,10 @@ export function formatPatternAudit(report) {
 	if (report.yarnInCount !== 1 || report.yarnOutCount !== 1) {
 		failures.push(`${report.yarnInCount} yarn-in / ${report.yarnOutCount} yarn-out`);
 	}
-	if (!report.yarnDirectionCycleFree) failures.push("directed yarn cycle");
+	if (!report.yarnDirectionCycleFree) {
+		const cycleCells = report.yarnDirectionCycle.slice(0, 8).map(item => item.cell).join(" -> ");
+		failures.push(`directed yarn cycle${cycleCells ? ` (${cycleCells} -> ${report.yarnDirectionCycle[0].cell})` : ""}`);
+	}
 	const diagnostics = [
 		`${report.topologyComponentCount} cell components`,
 		`${report.topologyErrorCount} topology warning(s)`,

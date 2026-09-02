@@ -12,6 +12,7 @@ const libraryBuffer = fs.readFileSync(new URL("../block-library/blocks.json", im
 const library = Library.fromArrayBuffer(exactArrayBuffer(libraryBuffer));
 const yarnInTemplate = library.getTemplateByLongname("yarn-in.right");
 const yarnOutTemplate = library.getTemplateByLongname("yarn-out.right");
+const yarnNextRowTemplate = library.getTemplateByLongname("yarn-next-row.right");
 
 const validBody = new Body();
 const yarnIn = Cell.fromTemplate(yarnInTemplate);
@@ -33,6 +34,20 @@ assert.equal(brokenReport.strictContinuityPassed, false);
 assert.equal(brokenReport.openYarnFaceCount, 2);
 assert.equal(brokenReport.yarnComponentCount, 2);
 assert.match(formatPatternAudit(brokenReport), /Comparative diagnostics only/);
+
+const cycleBody = new Body();
+const cycleCells = [0, 1, 2].map(() => Cell.fromTemplate(yarnNextRowTemplate));
+for (let index = 0; index < cycleCells.length; ++index) {
+	const current = cycleCells[index];
+	const next = cycleCells[(index + 1) % cycleCells.length];
+	current.connections[3] = {cell: next, face: 2};
+	next.connections[2] = {cell: current, face: 3};
+}
+cycleBody.cells.push(...cycleCells);
+const cycleReport = auditPattern(cycleBody);
+assert.equal(cycleReport.yarnDirectionCycleFree, false);
+assert.equal(cycleReport.yarnDirectionCycle.length, 3);
+assert.match(formatPatternAudit(cycleReport), /0 -> 2 -> 1 -> 0|0 -> 1 -> 2 -> 0/);
 
 const bunnyBuffer = fs.readFileSync(new URL("../patterns/stanford-bunny.body", import.meta.url));
 const unconvertedBunny = Body.fromArrayBuffer(exactArrayBuffer(bunnyBuffer), library);

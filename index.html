@@ -854,7 +854,7 @@ window.gm = gm; //DEBUG
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
-import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-2';
+import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-3';
 
 // window.library = new sv.Library();
 
@@ -910,6 +910,7 @@ function runPatternAudit() {
 	if (report.invalidYarnEndpoints.length) console.table(report.invalidYarnEndpoints);
 	if (report.openYarnFaces.length) console.table(report.openYarnFaces);
 	if (report.internalFreeEnds.length) console.table(report.internalFreeEnds);
+	if (report.yarnDirectionCycle.length) console.table(report.yarnDirectionCycle);
 	console.groupEnd();
 	return report;
 }
@@ -5411,7 +5412,7 @@ async function autoConvertSTLCells() {
 		cursorDirty();
 		const audit = runPatternAudit();
 		if (!audit.passed) {
-			console.warn("STL conversion produced a pattern that failed the quality audit.");
+			console.warn("STL conversion produced a pattern that failed the author's compatibility checks.");
 		}
 		requestRedraw();
 	} catch (err) {
