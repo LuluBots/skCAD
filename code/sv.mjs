@@ -185,8 +185,11 @@ export class Body {
 		}
 
 		const triangles = parseSTL(arrayBuffer);
-		const template = library.getTemplateByLongname("null.right.alt");
-		if (!template) throw new Error("Template 'null.right.alt' not found");
+		// Use the unlabeled block template available in blocks.json as the
+		// geometric voxel cell. The old null.right.alt name is not present in
+		// the current library export.
+		const template = library.getTemplateByLongname("unlabeled.right.alt");
+		if (!template) throw new Error("Template 'unlabeled.right.alt' not found");
 
 		const [dx, dy, dz] = voxelSize;
 		let min = [Infinity, Infinity, Infinity];
