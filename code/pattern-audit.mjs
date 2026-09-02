@@ -16,6 +16,7 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 	const incompatibleConnections = [];
 	const invalidYarnEndpoints = [];
 	const openYarnFaces = [];
+	const openYarnFacesByType = {};
 	const internalFreeEnds = [];
 	const endpointSegments = new Map();
 	const segments = [];
@@ -70,11 +71,13 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 
 		for (const face of yarnFaces) {
 			if (cell.connections[face] === null) {
+				const faceType = cell.template.faces[face].type;
+				openYarnFacesByType[faceType] = (openYarnFacesByType[faceType] || 0) + 1;
 				openYarnFaces.push({
 					cell: index,
 					template: cell.template.longname,
 					face,
-					type: cell.template.faces[face].type
+					type: faceType
 				});
 			}
 		}
@@ -239,6 +242,7 @@ export function auditPattern(body, {sampleLimit = 12} = {}) {
 		invalidYarnEndpoints: invalidYarnEndpoints.slice(0, sampleLimit),
 		openYarnFaceCount: openYarnFaces.length,
 		openYarnFacesPerCell: body.cells.length ? openYarnFaces.length / body.cells.length : 0,
+		openYarnFacesByType,
 		openYarnFaces: openYarnFaces.slice(0, sampleLimit),
 		internalFreeEndCount: internalFreeEnds.length,
 		internalFreeEndsPerCell: body.cells.length ? internalFreeEnds.length / body.cells.length : 0,
@@ -266,7 +270,11 @@ export function formatPatternAudit(report) {
 	}
 	const diagnostics = [
 		...(report.rowTransitionInfo ? [
-			`${report.rowTransitionInfo.connectionsCount} complete / ${report.rowTransitionInfo.failedConnectionsCount} failed row transitions`
+			`${report.rowTransitionInfo.expectedConnectionsCount} expected / `
+			+ `${report.rowTransitionInfo.connectionsCount} complete / `
+			+ `${report.rowTransitionInfo.failedConnectionsCount} builder-failed / `
+			+ `${report.rowTransitionInfo.skippedMissingCurrentOutput} missing-output / `
+			+ `${report.rowTransitionInfo.skippedMissingNextInput} missing-input row transitions`
 		] : []),
 		`${report.topologyComponentCount} cell components`,
 		`${report.topologyErrorCount} topology warning(s)`,

@@ -854,7 +854,7 @@ window.gm = gm; //DEBUG
 // Pages may otherwise serve a fresh index.html with a cached sv.mjs.
 import * as sv from './code/sv.mjs?v=stl-adapter-20260901-3';
 window.sv = sv; //DEBUG
-import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-4';
+import {auditPattern, formatPatternAudit} from './code/pattern-audit.mjs?v=pattern-audit-20260901-5';
 
 // window.library = new sv.Library();
 
@@ -897,6 +897,9 @@ function runPatternAudit() {
 		incompatibleConnections: report.incompatibleConnectionCount,
 		rowTransitionsComplete: report.rowTransitionInfo?.connectionsCount,
 		rowTransitionsFailed: report.rowTransitionInfo?.failedConnectionsCount,
+		rowTransitionsExpected: report.rowTransitionInfo?.expectedConnectionsCount,
+		rowTransitionsSkippedMissingOutput: report.rowTransitionInfo?.skippedMissingCurrentOutput,
+		rowTransitionsSkippedMissingInput: report.rowTransitionInfo?.skippedMissingNextInput,
 		openYarnFaces: report.openYarnFaceCount,
 		openYarnFacesPerCell: report.openYarnFacesPerCell,
 		internalFreeYarnEnds: report.internalFreeEndCount,
@@ -911,6 +914,10 @@ function runPatternAudit() {
 	if (report.incompatibleConnections.length) console.table(report.incompatibleConnections);
 	if (report.invalidYarnEndpoints.length) console.table(report.invalidYarnEndpoints);
 	if (report.openYarnFaces.length) console.table(report.openYarnFaces);
+	if (Object.keys(report.openYarnFacesByType).length) console.table(report.openYarnFacesByType);
+	if (report.rowTransitionInfo?.skippedTransitions?.length) {
+		console.table(report.rowTransitionInfo.skippedTransitions);
+	}
 	if (report.internalFreeEnds.length) console.table(report.internalFreeEnds);
 	if (report.yarnDirectionCycle.length) console.table(report.yarnDirectionCycle);
 	console.groupEnd();
@@ -6359,6 +6366,20 @@ function connectBetweenRows() {
     
     let connectionsCount = 0;
     let failedConnectionsCount = 0;
+	let expectedConnectionsCount = 0;
+	let skippedMissingCurrentOutput = 0;
+	let skippedMissingNextInput = 0;
+	const skippedTransitions = [];
+
+	function openYFaces(cell) {
+		const faces = [];
+		for (let face = 0; face < cell.template.faces.length; ++face) {
+			if (cell.template.faces[face].type.endsWith("y1") && cell.connections[face] === null) {
+				faces.push(cell.template.faces[face].type);
+			}
+		}
+		return faces.join(",") || "none";
+	}
 
 	function rollbackGeneratedCells(startIndex) {
 		const generated = new Set(body.cells.slice(startIndex));
@@ -6413,17 +6434,29 @@ function connectBetweenRows() {
         
         const currentCell = currentPathItem.cell;
         const nextCell = nextPathItem.cell;
+		expectedConnectionsCount++;
         
         // Find +y1 face in current cell
         const currentY1Face = getCurrentY1Face(currentCell, "+y1");
-        if (currentY1Face === -1) {
-            continue;
-        }
         // Find -y1 face in next cell
         const nextY1Face = getCurrentY1Face(nextCell, "-y1");
-        if (nextY1Face === -1) {
-            continue;
-        }
+		if (currentY1Face === -1 || nextY1Face === -1) {
+			if (currentY1Face === -1) skippedMissingCurrentOutput++;
+			if (nextY1Face === -1) skippedMissingNextInput++;
+			if (skippedTransitions.length < 12) {
+				skippedTransitions.push({
+					pathFrom: i,
+					pathTo: i + 1,
+					currentCell: body.cells.indexOf(currentCell),
+					currentDirection: currentPathItem.direction,
+					currentOpenYFaces: openYFaces(currentCell),
+					nextCell: body.cells.indexOf(nextCell),
+					nextDirection: nextPathItem.direction,
+					nextOpenYFaces: openYFaces(nextCell)
+				});
+			}
+			continue;
+		}
         
         const currentRowDirection = currentPathItem.direction;
 
@@ -6482,8 +6515,19 @@ function connectBetweenRows() {
         requestRedraw();
     }
     
-	console.info(`Row transitions: ${connectionsCount} complete, ${failedConnectionsCount} failed`);
-	const result = {connectionsCount, failedConnectionsCount};
+	console.info(
+		`Row transitions: ${expectedConnectionsCount} expected, ${connectionsCount} complete, `
+		+ `${failedConnectionsCount} builder failures, ${skippedMissingCurrentOutput} missing outputs, `
+		+ `${skippedMissingNextInput} missing inputs`
+	);
+	const result = {
+		expectedConnectionsCount,
+		connectionsCount,
+		failedConnectionsCount,
+		skippedMissingCurrentOutput,
+		skippedMissingNextInput,
+		skippedTransitions
+	};
 	if (body.sourceType === "stl") body.stlRowTransitionInfo = result;
     return result;
 }
